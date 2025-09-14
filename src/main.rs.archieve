@@ -1,0 +1,107 @@
+// mod process;
+// fn main() {
+//     println!("Hello, world!");
+// }
+//
+//
+
+use std::error::Error;
+use std::fs;
+use std::io;
+use thiserror::Error;
+mod error;
+mod process;
+
+use error::Errorbpm;
+#[derive(Error, Debug)]
+pub enum ConfigError {
+    #[error("Failed to read config file at '{path}'")]
+    ReadError {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("Config file is empty")]
+    EmptyConfig,
+
+    #[error("Missing required field: {field}")]
+    MissingField { field: String },
+
+    #[error("Invalid config format")]
+    ParseError(#[from] serde_json::Error),
+}
+
+#[derive(Error, Debug)]
+pub enum AppError {
+    #[error("Configuration error")]
+    Config(#[from] ConfigError),
+
+    #[error("Database connection failed")]
+    Database(#[from] DatabaseError),
+}
+
+#[derive(Error, Debug)]
+pub enum DatabaseError {
+    #[error("Connection timeout")]
+    Timeout,
+}
+
+// Example functions
+fn read_config_file(path: &str) -> Result<String, ConfigError> {
+    fs::read_to_string(path).map_err(|source| ConfigError::ReadError {
+        path: path.to_string(),
+        source,
+    })
+}
+
+fn parse_config(content: &str) -> Result<Config, ConfigError> {
+    if content.is_empty() {
+        return Err(ConfigError::EmptyConfig);
+    }
+
+    if !content.contains("version") {
+        return Err(ConfigError::MissingField {
+            field: "version".to_string(),
+        });
+    }
+
+    Ok(Config {
+        version: "1.0".to_string(),
+    })
+}
+
+#[derive(Debug)]
+struct Config {
+    version: String,
+}
+
+fn initialize_app(config_path: &str) -> Result<(), AppError> {
+    let content = read_config_file(config_path)?;
+    let _config = parse_config(&content)?;
+
+    // Simulate database connection that might fail
+    connect_database().map_err(AppError::Database)?;
+
+    Ok(())
+}
+
+fn connect_database() -> Result<(), DatabaseError> {
+    Err(DatabaseError::Timeout)
+}
+
+fn main() {
+    match initialize_app("config.toml") {
+        Ok(()) => println!("App initialized successfully"),
+        Err(err) => {
+            println!("Error: {}", err);
+
+            // Print the error chain
+            let mut source = err.source();
+            while let Some(err) = source {
+                println!("  Caused by: {}", err);
+                source = err.source();
+            }
+        }
+    }
+}
