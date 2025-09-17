@@ -1,8 +1,7 @@
 use once_cell::sync::Lazy;
 use std::collections::VecDeque;
-use std::fmt;
+use std::error::Error;
 use std::sync::Mutex;
-use std::{collections::vec_deque, error::Error};
 use sysinfo::{Pid, System};
 use thiserror::Error;
 

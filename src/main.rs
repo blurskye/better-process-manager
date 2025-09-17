@@ -1,5 +1,6 @@
 use clap::Parser;
 mod communication;
+mod config;
 mod error;
 mod process_manager;
 
