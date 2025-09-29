@@ -27,8 +27,10 @@ pub async fn spawn(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     loop {
         let app_start_timestamp = Instant::now();
-        let directory = directory.unwrap_or("~/");
-        let mut child = Command::new(program)
+        // let directory = directory.unwrap_or("~/");
+
+        let directory = directory.clone().unwrap_or_else(|| "~/".to_string());
+        let mut child = Command::new(&program)
             .current_dir(directory)
             .args(&args)
             .stdout(Stdio::piped())
@@ -66,7 +68,7 @@ pub async fn spawn(
 
         stdout_handle.await??;
         stderr_handle.await??;
-        if app_start_timestamp.elapsed() < Duration::from_secs(2.5) {
+        if app_start_timestamp.elapsed() < Duration::from_secs(3) {
             break;
         }
 
