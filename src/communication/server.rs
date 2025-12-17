@@ -90,7 +90,10 @@ pub fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     let ipc_dir = get_secure_ipc_dir()?;
     
     // Set iceoryx2 root directory via environment variable
-    std::env::set_var("IOX2_ROOT_DIR", &ipc_dir);
+    // SAFETY: We're setting this at startup before any threads are spawned
+    unsafe {
+        std::env::set_var("IOX2_ROOT_DIR", &ipc_dir);
+    }
     
     let config = Config::default();
     let node = match NodeBuilder::new()

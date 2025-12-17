@@ -46,7 +46,10 @@ pub fn run_client(command: common::Command) -> Result<(), Box<dyn std::error::Er
     let ipc_dir = get_secure_ipc_dir()?;
     
     // Set iceoryx2 root directory via environment variable
-    std::env::set_var("IOX2_ROOT_DIR", &ipc_dir);
+    // SAFETY: We're setting this before any threads are spawned and before iceoryx2 initialization
+    unsafe {
+        std::env::set_var("IOX2_ROOT_DIR", &ipc_dir);
+    }
     
     let config = Config::default();
     let node = NodeBuilder::new()
@@ -89,7 +92,10 @@ pub fn run_monit() -> Result<(), Box<dyn std::error::Error>> {
     let ipc_dir = get_secure_ipc_dir()?;
     
     // Set iceoryx2 root directory via environment variable
-    std::env::set_var("IOX2_ROOT_DIR", &ipc_dir);
+    // SAFETY: We're setting this before any threads are spawned and before iceoryx2 initialization
+    unsafe {
+        std::env::set_var("IOX2_ROOT_DIR", &ipc_dir);
+    }
     
     let config = Config::default();
     let node = NodeBuilder::new()
