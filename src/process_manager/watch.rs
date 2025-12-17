@@ -2,8 +2,6 @@
 //!
 //! Implements file watching to automatically reload processes when source files change.
 
-#![allow(dead_code)] // Watch mode is for future integration
-
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -42,6 +40,7 @@ impl FileWatcher {
     }
 
     /// Add a directory to ignore
+    #[allow(dead_code)] // Valid API for users, not used by default integration
     pub fn ignore(&mut self, dir: String) {
         self.ignore_dirs.push(dir);
     }
@@ -158,6 +157,7 @@ impl FileWatcher {
 }
 
 /// Watch configuration
+#[allow(dead_code)] // Alternative config format, not used by current integration
 #[derive(Debug, Clone)]
 pub struct WatchConfig {
     pub enabled: bool,

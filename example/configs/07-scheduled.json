@@ -1,0 +1,14 @@
+{
+    "name": "cron-job",
+    "script": "python3",
+    "args": [
+        "daily_backup.py"
+    ],
+    "cwd": "/home/user/scripts",
+    "restart": {
+        "policy": "never",
+        "max_restarts": 0,
+        "restart_delay": "0s"
+    },
+    "schedule": "0 2 * * *"
+}

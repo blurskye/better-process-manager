@@ -1,0 +1,15 @@
+{
+    "name": "worker",
+    "script": "python3",
+    "args": [
+        "worker.py"
+    ],
+    "cwd": "/home/user/workers",
+    "healthcheck": {
+        "type": "command",
+        "command": "/home/user/workers/healthcheck.sh",
+        "interval": "30s",
+        "timeout": "10s",
+        "retries": 2
+    }
+}

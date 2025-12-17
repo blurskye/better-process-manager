@@ -1,0 +1,14 @@
+{
+    "name": "backend",
+    "script": "cargo",
+    "args": [
+        "run",
+        "--release"
+    ],
+    "cwd": "/home/user/rust-api",
+    "restart": {
+        "policy": "on-failure",
+        "max_restarts": 10,
+        "restart_delay": "5s"
+    }
+}

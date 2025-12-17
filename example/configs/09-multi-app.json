@@ -1,0 +1,48 @@
+{
+    "my-project": [
+        {
+            "name": "web-frontend",
+            "script": "npm",
+            "args": [
+                "run",
+                "serve"
+            ],
+            "cwd": "/home/user/project/frontend",
+            "env": {
+                "PORT": "8080"
+            }
+        },
+        {
+            "name": "api-backend",
+            "script": "python3",
+            "args": [
+                "-m",
+                "uvicorn",
+                "main:app",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8000"
+            ],
+            "cwd": "/home/user/project/backend",
+            "env": {
+                "DATABASE_URL": "sqlite:///./app.db"
+            },
+            "healthcheck": {
+                "type": "http",
+                "url": "http://localhost:8000/health",
+                "interval": "30s",
+                "timeout": "5s",
+                "retries": 3
+            }
+        },
+        {
+            "name": "background-worker",
+            "script": "python3",
+            "args": [
+                "worker.py"
+            ],
+            "cwd": "/home/user/project/workers"
+        }
+    ]
+}

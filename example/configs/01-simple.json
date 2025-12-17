@@ -1,0 +1,6 @@
+{
+  "name": "simple-server",
+  "script": "python3",
+  "args": ["-m", "http.server", "8080"],
+  "cwd": "/tmp"
+}

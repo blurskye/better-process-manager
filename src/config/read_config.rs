@@ -94,6 +94,7 @@ pub struct HealthCheck {
 #[serde(rename_all = "lowercase")]
 pub enum HealthCheckType {
     Http,
+    Tcp,
     Command,
 }
 

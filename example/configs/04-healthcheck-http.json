@@ -1,0 +1,19 @@
+{
+    "name": "rest-api",
+    "script": "python3",
+    "args": [
+        "app.py"
+    ],
+    "cwd": "/home/user/flask-app",
+    "env": {
+        "FLASK_ENV": "production"
+    },
+    "healthcheck": {
+        "type": "http",
+        "url": "http://localhost:5000/health",
+        "interval": "60s",
+        "timeout": "10s",
+        "retries": 3,
+        "start_period": "15s"
+    }
+}

@@ -1,9 +1,13 @@
 use crate::communication::common::ChunkPayload;
 use crate::config::read_config::AppConfig;
+use crate::process_manager::health::{check_health, HealthStatus};
 use crate::process_manager::registry::{ProcessInfo, ProcessRegistry, ProcessState};
+use crate::process_manager::watch::FileWatcher;
+use chrono::Utc;
 use iceoryx2::active_request::ActiveRequest;
 use iceoryx2::prelude::*;
 use iceoryx2::service::builder::request_response::RequestResponseOpenError;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -76,6 +80,9 @@ pub fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     // Spawn background monitoring thread
     let registry_clone = registry.clone();
     std::thread::spawn(move || {
+        // Store file watchers for processes with watch enabled
+        let mut file_watchers: HashMap<String, FileWatcher> = HashMap::new();
+
         loop {
             std::thread::sleep(Duration::from_secs(5));
             registry_clone.refresh_metrics();
@@ -91,6 +98,104 @@ pub fn run_server() -> Result<(), Box<dyn std::error::Error>> {
                     // Actually restart the process
                     match start_process(&registry_clone, &process) {
                         Ok(_) => println!("Process '{}' restarted successfully", name),
+                        Err(e) => eprintln!("Failed to restart '{}': {}", name, e),
+                    }
+                }
+            }
+
+            // Run health checks on running processes
+            let running = registry_clone.get_running_processes();
+            for process in running {
+                if let Some(hc_config) = &process.healthcheck {
+                    // Check if enough time has passed since last check
+                    let should_check = match process.last_health_check {
+                        Some(last) => {
+                            let elapsed = Utc::now().signed_duration_since(last);
+                            elapsed.num_seconds() >= hc_config.interval.as_secs() as i64
+                        }
+                        None => {
+                            // Check if start period has passed
+                            if let Some(started) = process.started_at {
+                                let elapsed = Utc::now().signed_duration_since(started);
+                                elapsed.num_seconds() >= hc_config.start_period.as_secs() as i64
+                            } else {
+                                false
+                            }
+                        }
+                    };
+
+                    if should_check {
+                        let status = check_health(hc_config);
+                        let _ = registry_clone.update_health_status(&process.name, status.clone());
+
+                        match status {
+                            HealthStatus::Healthy => {
+                                // Reset failure count
+                                let _ = registry_clone.reset_health_failures(&process.name);
+                            }
+                            HealthStatus::Unhealthy(reason) => {
+                                let failures =
+                                    registry_clone.increment_health_failures(&process.name);
+                                println!(
+                                    "Health check failed for '{}': {} (failure {})",
+                                    process.name, reason, failures
+                                );
+
+                                // Restart if too many failures
+                                if failures >= hc_config.retries {
+                                    println!("Process '{}' unhealthy, restarting...", process.name);
+                                    let _ = registry_clone
+                                        .update_state(&process.name, ProcessState::Restarting);
+                                    let _ = registry_clone.reset_health_failures(&process.name);
+                                    if let Some(proc) = registry_clone.get(&process.name) {
+                                        match start_process(&registry_clone, &proc) {
+                                            Ok(_) => println!(
+                                                "Process '{}' restarted due to health check",
+                                                process.name
+                                            ),
+                                            Err(e) => eprintln!(
+                                                "Failed to restart '{}': {}",
+                                                process.name, e
+                                            ),
+                                        }
+                                    }
+                                }
+                            }
+                            HealthStatus::Unknown => {}
+                        }
+                    }
+                }
+
+                // Initialize file watcher if needed
+                if !process.watch_dirs.is_empty() && !file_watchers.contains_key(&process.name) {
+                    let watcher = FileWatcher::new(
+                        process.watch_dirs.clone(),
+                        process.watch_patterns.clone(),
+                    );
+                    if watcher.init().is_ok() {
+                        file_watchers.insert(process.name.clone(), watcher);
+                    }
+                }
+            }
+
+            // Check file watchers for changes
+            let mut to_restart = Vec::new();
+            for (name, watcher) in &file_watchers {
+                if let Ok(changes) = watcher.check_changes() {
+                    if !changes.is_empty() {
+                        println!("File changes detected for '{}': {:?}", name, changes);
+                        to_restart.push(name.clone());
+                    }
+                }
+            }
+
+            // Restart processes with file changes
+            for name in to_restart {
+                if let Some(process) = registry_clone.get(&name) {
+                    println!("Restarting '{}' due to file changes...", name);
+                    let _ = registry_clone.update_state(&name, ProcessState::Restarting);
+                    match start_process(&registry_clone, &process) {
+                        Ok(_) => println!("Process '{}' restarted due to file changes", name),
                         Err(e) => eprintln!("Failed to restart '{}': {}", name, e),
                     }
                 }

@@ -1,0 +1,32 @@
+{
+    "name": "full-stack-api",
+    "script": "node",
+    "args": [
+        "dist/server.js"
+    ],
+    "cwd": "/home/user/fullstack-app",
+    "env": {
+        "NODE_ENV": "production",
+        "PORT": "3000",
+        "REDIS_URL": "redis://localhost:6379",
+        "JWT_SECRET": "your-secret-here"
+    },
+    "log": {
+        "out": "/var/log/bpm/fullstack-out.log",
+        "error": "/var/log/bpm/fullstack-error.log",
+        "combined": false
+    },
+    "restart": {
+        "policy": "always",
+        "max_restarts": -1,
+        "restart_delay": "3s"
+    },
+    "healthcheck": {
+        "type": "http",
+        "url": "http://localhost:3000/api/health",
+        "interval": "30s",
+        "timeout": "5s",
+        "retries": 3,
+        "start_period": "20s"
+    }
+}

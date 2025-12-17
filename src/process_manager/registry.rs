@@ -3,12 +3,15 @@
 //! This module provides the central registry for all processes managed by BPM.
 //! It handles process lifecycle, state tracking, and metrics collection.
 
-use crate::config::read_config::App;
+use crate::config::read_config::{App, HealthCheck, HealthCheckType as ConfigHealthCheckType};
+use crate::process_manager::health::{HealthCheckConfig, HealthCheckType, HealthStatus};
+use crate::process_manager::process::combined_usage;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use sysinfo::{Pid, System};
 
 /// Process lifecycle states
@@ -69,6 +72,20 @@ pub struct ProcessInfo {
     pub auto_restart: bool,
     /// Maximum memory before restart (0 = disabled)
     pub max_memory: u64,
+    /// Health check configuration (optional)
+    #[serde(skip)]
+    pub healthcheck: Option<HealthCheckConfig>,
+    /// Current health status
+    #[serde(skip)]
+    pub health_status: HealthStatus,
+    /// Last health check time
+    pub last_health_check: Option<DateTime<Utc>>,
+    /// Consecutive health check failures
+    pub health_failures: u32,
+    /// Watch directories for auto-restart on file changes
+    pub watch_dirs: Vec<PathBuf>,
+    /// Watch patterns (e.g., "*.js", "*.py")
+    pub watch_patterns: Vec<String>,
 }
 
 impl ProcessInfo {
@@ -79,6 +96,15 @@ impl ProcessInfo {
             .join("bpm")
             .join("logs")
             .join(&app.name);
+
+        // Convert health check config if present
+        let healthcheck = app
+            .healthcheck
+            .as_ref()
+            .map(|hc| Self::convert_healthcheck(hc));
+
+        // Get watch directories from cwd if specified
+        let watch_dirs = app.cwd.clone().map(|d| vec![d]).unwrap_or_default();
 
         Self {
             name: app.name.clone(),
@@ -95,8 +121,73 @@ impl ProcessInfo {
             memory_usage: 0,
             stdout_log: log_dir.join("out.log"),
             stderr_log: log_dir.join("error.log"),
-            auto_restart: true,
+            auto_restart: matches!(
+                app.restart.policy,
+                crate::config::read_config::RestartPolicy::Always
+                    | crate::config::read_config::RestartPolicy::OnFailure
+            ),
             max_memory: 0,
+            healthcheck,
+            health_status: HealthStatus::Unknown,
+            last_health_check: None,
+            health_failures: 0,
+            watch_dirs,
+            watch_patterns: vec![],
+        }
+    }
+
+    /// Convert config HealthCheck to internal HealthCheckConfig
+    fn convert_healthcheck(hc: &HealthCheck) -> HealthCheckConfig {
+        let check_type = match hc.check_type {
+            ConfigHealthCheckType::Http => HealthCheckType::Http {
+                url: hc
+                    .url
+                    .clone()
+                    .unwrap_or_else(|| "http://localhost:8080".to_string()),
+                expected_status: None,
+            },
+            ConfigHealthCheckType::Tcp => HealthCheckType::Tcp {
+                host: hc.host.clone().unwrap_or_else(|| "127.0.0.1".to_string()),
+                port: hc.port.unwrap_or(8080),
+            },
+            ConfigHealthCheckType::Command => HealthCheckType::Command {
+                cmd: hc.command.clone().unwrap_or_default(),
+                args: vec![],
+            },
+        };
+
+        HealthCheckConfig {
+            check_type,
+            interval: Self::parse_duration_str(&hc.interval),
+            timeout: Self::parse_duration_str(&hc.timeout),
+            retries: hc.retries,
+            start_period: hc
+                .start_period
+                .as_ref()
+                .map(|s| Self::parse_duration_str(s))
+                .unwrap_or(Duration::from_secs(10)),
+        }
+    }
+
+    /// Parse duration string like "30s", "5m", "1h"
+    fn parse_duration_str(s: &str) -> Duration {
+        if s.ends_with('s') {
+            s.trim_end_matches('s')
+                .parse::<u64>()
+                .map(Duration::from_secs)
+                .unwrap_or(Duration::from_secs(30))
+        } else if s.ends_with('m') {
+            s.trim_end_matches('m')
+                .parse::<u64>()
+                .map(|m| Duration::from_secs(m * 60))
+                .unwrap_or(Duration::from_secs(30))
+        } else if s.ends_with('h') {
+            s.trim_end_matches('h')
+                .parse::<u64>()
+                .map(|h| Duration::from_secs(h * 3600))
+                .unwrap_or(Duration::from_secs(30))
+        } else {
+            Duration::from_secs(30)
         }
     }
 
@@ -248,15 +339,18 @@ impl ProcessRegistry {
             .filter_map(|(name, p)| p.pid.map(|pid| (name.clone(), pid)))
             .collect();
 
-        // Collect metrics from system
+        // Collect metrics - use combined_usage to get process tree metrics
         let metrics: Vec<(String, Option<(f32, u64)>)> = pids_to_check
             .iter()
             .map(|(name, pid)| {
-                let sys_pid = Pid::from_u32(*pid);
-                let metrics = inner
-                    .system
-                    .process(sys_pid)
-                    .map(|p| (p.cpu_usage(), p.memory()));
+                // Try to get combined metrics for process tree, fall back to single process
+                let metrics = combined_usage(*pid).ok().or_else(|| {
+                    let sys_pid = Pid::from_u32(*pid);
+                    inner
+                        .system
+                        .process(sys_pid)
+                        .map(|p| (p.cpu_usage(), p.memory()))
+                });
                 (name.clone(), metrics)
             })
             .collect();
@@ -293,6 +387,59 @@ impl ProcessRegistry {
         }
 
         dead
+    }
+
+    /// Get all running processes
+    pub fn get_running_processes(&self) -> Vec<ProcessInfo> {
+        let inner = match self.inner.read() {
+            Ok(guard) => guard,
+            Err(_) => return vec![],
+        };
+
+        inner
+            .processes
+            .values()
+            .filter(|p| p.state == ProcessState::Running)
+            .cloned()
+            .collect()
+    }
+
+    /// Update health status for a process
+    pub fn update_health_status(&self, name: &str, status: HealthStatus) -> Result<(), String> {
+        let mut inner = self.inner.write().map_err(|e| e.to_string())?;
+        if let Some(process) = inner.processes.get_mut(name) {
+            process.health_status = status;
+            process.last_health_check = Some(Utc::now());
+            Ok(())
+        } else {
+            Err(format!("Process '{}' not found", name))
+        }
+    }
+
+    /// Increment health failure count and return new count
+    pub fn increment_health_failures(&self, name: &str) -> u32 {
+        let mut inner = match self.inner.write() {
+            Ok(guard) => guard,
+            Err(_) => return 0,
+        };
+
+        if let Some(process) = inner.processes.get_mut(name) {
+            process.health_failures += 1;
+            process.health_failures
+        } else {
+            0
+        }
+    }
+
+    /// Reset health failure count
+    pub fn reset_health_failures(&self, name: &str) -> Result<(), String> {
+        let mut inner = self.inner.write().map_err(|e| e.to_string())?;
+        if let Some(process) = inner.processes.get_mut(name) {
+            process.health_failures = 0;
+            Ok(())
+        } else {
+            Err(format!("Process '{}' not found", name))
+        }
     }
 
     /// Format process list as a table string
@@ -401,6 +548,12 @@ mod tests {
             stderr_log: PathBuf::from("/tmp/err.log"),
             auto_restart: true,
             max_memory: 0,
+            healthcheck: None,
+            health_status: HealthStatus::Unknown,
+            last_health_check: None,
+            health_failures: 0,
+            watch_dirs: vec![],
+            watch_patterns: vec![],
         };
 
         assert!(registry.register(info.clone()).is_ok());

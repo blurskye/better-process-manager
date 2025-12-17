@@ -1,0 +1,13 @@
+{
+    "name": "web-api",
+    "script": "node",
+    "args": [
+        "server.js"
+    ],
+    "cwd": "/home/user/my-app",
+    "env": {
+        "NODE_ENV": "production",
+        "PORT": "3000",
+        "DATABASE_URL": "postgres://localhost:5432/mydb"
+    }
+}

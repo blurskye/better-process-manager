@@ -2,8 +2,6 @@
 //!
 //! Provides utilities for getting descendant processes and combined usage stats.
 
-#![allow(dead_code)] // These utilities are for future use
-
 use once_cell::sync::Lazy;
 use std::collections::VecDeque;
 use std::error::Error;
@@ -13,9 +11,6 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ProcessError {
-    #[error("Failed to lock the system mutex")]
-    LockError,
-
     #[error("provided pid was invalid")]
     InvalidPid(u32),
 }
