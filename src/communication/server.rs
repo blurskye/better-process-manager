@@ -13,6 +13,31 @@ use std::time::Duration;
 
 use crate::communication::common;
 
+/// Get secure IPC directory with proper permissions
+fn get_secure_ipc_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    // Try XDG_RUNTIME_DIR first (Linux standard, user-specific, mode 0700)
+    let ipc_dir = if let Some(runtime_dir) = dirs::runtime_dir() {
+        runtime_dir.join("bpm").join("ipc")
+    } else if let Some(home_dir) = dirs::home_dir() {
+        // Fallback to ~/.local/share/bpm/ipc (user-specific)
+        home_dir.join(".local").join("share").join("bpm").join("ipc")
+    } else {
+        return Err("Cannot determine user home directory. Set HOME environment variable.".into());
+    };
+
+    // Create directory with secure permissions (0700 - owner only)
+    std::fs::create_dir_all(&ipc_dir)?;
+    
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = std::fs::Permissions::from_mode(0o700);
+        std::fs::set_permissions(&ipc_dir, permissions)?;
+    }
+    
+    Ok(ipc_dir)
+}
+
 /// Global process registry for the daemon
 static REGISTRY: std::sync::OnceLock<ProcessRegistry> = std::sync::OnceLock::new();
 
@@ -50,6 +75,12 @@ where
 }
 
 pub fn run_server() -> Result<(), Box<dyn std::error::Error>> {
+    // Create user-specific IPC directory with secure permissions
+    let ipc_dir = get_secure_ipc_dir()?;
+    
+    // Set iceoryx2 root directory via environment variable
+    std::env::set_var("IOX2_ROOT_DIR", &ipc_dir);
+    
     let config = Config::default();
     let node = NodeBuilder::new()
         .config(&config)
