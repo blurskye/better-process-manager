@@ -14,12 +14,18 @@ pub enum Command {
     List,
     Status([u8; CHUNK_PAYLOAD_CAPACITY]),
     Start([u8; CHUNK_PAYLOAD_CAPACITY]),
+    Stop([u8; CHUNK_PAYLOAD_CAPACITY]),
     Enable([u8; CHUNK_PAYLOAD_CAPACITY]),
     Disable([u8; CHUNK_PAYLOAD_CAPACITY]),
     Delete([u8; CHUNK_PAYLOAD_CAPACITY]),
     Logs([u8; CHUNK_PAYLOAD_CAPACITY]),
     Restart([u8; CHUNK_PAYLOAD_CAPACITY]),
+    Flush([u8; CHUNK_PAYLOAD_CAPACITY]),
+    Save,
+    Resurrect,
+    Monit,
 }
+
 impl Command {
     pub fn encode_payload(input: &str) -> [u8; CHUNK_PAYLOAD_CAPACITY] {
         let mut buffer = [0u8; CHUNK_PAYLOAD_CAPACITY];
@@ -28,6 +34,7 @@ impl Command {
         buffer[..len].copy_from_slice(&bytes[..len]);
         buffer
     }
+
     pub fn decode_payload(payload: &[u8]) -> Result<&str, std::str::Utf8Error> {
         let end = payload
             .iter()
@@ -35,9 +42,11 @@ impl Command {
             .unwrap_or(payload.len());
         std::str::from_utf8(&payload[..end])
     }
+
     pub fn new_daemon() -> Self {
         Self::Daemon
     }
+
     pub fn new_list() -> Self {
         Self::List
     }
@@ -48,6 +57,10 @@ impl Command {
 
     pub fn new_start(input: &str) -> Self {
         Self::Start(Self::encode_payload(input))
+    }
+
+    pub fn new_stop(input: &str) -> Self {
+        Self::Stop(Self::encode_payload(input))
     }
 
     pub fn new_enable(input: &str) -> Self {
@@ -68,6 +81,10 @@ impl Command {
 
     pub fn new_restart(input: &str) -> Self {
         Self::Restart(Self::encode_payload(input))
+    }
+
+    pub fn new_flush(input: &str) -> Self {
+        Self::Flush(Self::encode_payload(input))
     }
 }
 

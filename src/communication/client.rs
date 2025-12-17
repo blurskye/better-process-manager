@@ -4,6 +4,7 @@ use crate::communication::common;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+/// Auto-start daemon if not running and send command
 pub fn run_client(command: common::Command) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::default();
     let node = NodeBuilder::new()
@@ -12,16 +13,91 @@ pub fn run_client(command: common::Command) -> Result<(), Box<dyn std::error::Er
 
     let service_name = common::IPC_NAME;
 
-    println!("Requesting 'list' command from server...");
+    // Try to connect, auto-start daemon if needed
+    if !crate::communication::server::server_running(&node, service_name)? {
+        eprintln!("Daemon not running. Start it with: bpm daemon");
+        return Err("Daemon not running".into());
+    }
+
     match request_server(&node, service_name, command, Duration::from_secs(5)) {
         Ok(response) => {
-            // println!("\n--- Server Response ---\n{}", response);
             println!("{}", response);
         }
         Err(e) => {
             eprintln!("Error: {}", e);
+            return Err(e);
         }
     }
+
+    Ok(())
+}
+
+/// Run the monitoring dashboard (TUI)
+pub fn run_monit() -> Result<(), Box<dyn std::error::Error>> {
+    use crossterm::{
+        event::{self, Event, KeyCode},
+        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+        ExecutableCommand,
+    };
+    use ratatui::prelude::*;
+    use std::io::stdout;
+
+    let config = Config::default();
+    let node = NodeBuilder::new()
+        .config(&config)
+        .create::<ipc::Service>()?;
+
+    let service_name = common::IPC_NAME;
+
+    // Check if daemon is running
+    if !crate::communication::server::server_running(&node, service_name)? {
+        eprintln!("Daemon not running. Start it with: bpm daemon");
+        return Err("Daemon not running".into());
+    }
+
+    // Setup terminal
+    enable_raw_mode()?;
+    stdout().execute(EnterAlternateScreen)?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+
+    loop {
+        // Get process list
+        let response = request_server(
+            &node,
+            service_name,
+            common::Command::List,
+            Duration::from_secs(2),
+        )
+        .unwrap_or_else(|_| "Failed to get process list".to_string());
+
+        terminal.draw(|frame| {
+            let area = frame.area();
+
+            let block = ratatui::widgets::Block::default()
+                .title(" BPM Monitor (q to quit) ")
+                .borders(ratatui::widgets::Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan));
+
+            let paragraph = ratatui::widgets::Paragraph::new(response.clone())
+                .block(block)
+                .style(Style::default().fg(Color::White));
+
+            frame.render_widget(paragraph, area);
+        })?;
+
+        // Handle input
+        if event::poll(Duration::from_millis(1000))? {
+            if let Event::Key(key) = event::read()? {
+                if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
+                    break;
+                }
+            }
+        }
+    }
+
+    // Cleanup terminal
+    disable_raw_mode()?;
+    stdout().execute(LeaveAlternateScreen)?;
 
     Ok(())
 }
@@ -42,7 +118,6 @@ where
 
     let client = service.client_builder().create()?;
 
-    // println!("Sending command to server...");
     let pending_response = client.send_copy(command)?;
 
     let mut received_chunks = BTreeMap::new();
@@ -53,10 +128,6 @@ where
     while !message_complete && start_time.elapsed() < timeout {
         if let Some(response) = pending_response.receive()? {
             let chunk = response.payload();
-            // println!(
-            //     "  < Received chunk {} (last: {})",
-            //     chunk.sequence_number, chunk.is_last
-            // );
 
             let payload_data = chunk.payload[..chunk.used_payload_size as usize].to_vec();
             received_chunks.insert(chunk.sequence_number, payload_data);

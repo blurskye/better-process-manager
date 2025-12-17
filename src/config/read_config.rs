@@ -22,8 +22,6 @@ pub struct App {
     pub args: Vec<String>,
     #[serde(default)]
     pub cwd: Option<PathBuf>,
-    #[serde(default = "default_instances")]
-    pub instances: u32,
     #[serde(default)]
     pub env: HashMap<String, String>,
     #[serde(default)]
@@ -105,9 +103,6 @@ pub struct AppReference {
     pub checksum: Option<String>, // File checksum to detect changes
 }
 
-fn default_instances() -> u32 {
-    1
-}
 fn default_log_out() -> String {
     "stdout".to_string()
 }
