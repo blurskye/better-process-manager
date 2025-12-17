@@ -5,18 +5,18 @@ use crate::communication::common;
 
 /// Get secure IPC directory with proper permissions
 fn get_secure_ipc_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    // Try XDG_RUNTIME_DIR first (Linux standard, user-specific, mode 0700)
-    let ipc_dir = if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
-        PathBuf::from(runtime_dir).join("bpm").join("ipc")
-    } else if let Some(runtime_dir) = dirs::runtime_dir() {
-        runtime_dir.join("bpm").join("ipc")
-    } else if let Some(home_dir) = std::env::var_os("HOME") {
-        // Fallback to ~/.local/share/bpm/ipc (user-specific)
+    // Use home directory by default - most reliable across all systems
+    let ipc_dir = if let Some(home_dir) = std::env::var_os("HOME") {
         PathBuf::from(home_dir).join(".local").join("share").join("bpm").join("ipc")
     } else if let Some(home_dir) = dirs::home_dir() {
         home_dir.join(".local").join("share").join("bpm").join("ipc")
+    } else if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        // Fallback to XDG_RUNTIME_DIR if home not available
+        PathBuf::from(runtime_dir).join("bpm").join("ipc")
+    } else if let Some(runtime_dir) = dirs::runtime_dir() {
+        runtime_dir.join("bpm").join("ipc")
     } else {
-        return Err("Cannot determine user home directory. Set HOME or XDG_RUNTIME_DIR environment variable.".into());
+        return Err("Cannot determine user home directory. Set HOME environment variable.".into());
     };
 
     // Create directory with secure permissions (0700 - owner only)
