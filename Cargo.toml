@@ -3,6 +3,14 @@ name = "bpm"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "bpm"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bpm"
+path = "src/main.rs"
+
 [dependencies]
 clap = { version = "4.5.47", features = ["derive"] }
 iceoryx2 = "0.7.0"

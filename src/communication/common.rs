@@ -93,8 +93,13 @@ pub struct MessageChunk {
     pub payload: [u8; CHUNK_PAYLOAD_CAPACITY],
 }
 
-/// IPC service name
-pub const IPC_NAME: &str = "better_process_manager";
+/// Get IPC service name with username suffix for multi-user support
+pub fn get_ipc_name() -> String {
+    let username = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "unknown".to_string());
+    format!("better_process_manager-{}", username)
+}
 
 impl Default for MessageChunk {
     fn default() -> Self {
@@ -122,5 +127,86 @@ impl ChunkPayload for MessageChunk {
             used_payload_size,
             payload: payload_array,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_ipc_name() {
+        let name = get_ipc_name();
+        assert!(name.starts_with("better_process_manager-"));
+        assert!(name.len() > "better_process_manager-".len());
+    }
+
+    #[test]
+    fn test_encode_decode_payload() {
+        let test_str = "test_process_name";
+        let encoded = Command::encode_payload(test_str);
+        let decoded = Command::decode_payload(&encoded).unwrap();
+        assert_eq!(decoded, test_str);
+    }
+
+    #[test]
+    fn test_encode_decode_empty() {
+        let test_str = "";
+        let encoded = Command::encode_payload(test_str);
+        let decoded = Command::decode_payload(&encoded).unwrap();
+        assert_eq!(decoded, test_str);
+    }
+
+    #[test]
+    fn test_encode_decode_long_string() {
+        let test_str = "a".repeat(CHUNK_PAYLOAD_CAPACITY - 1);
+        let encoded = Command::encode_payload(&test_str);
+        let decoded = Command::decode_payload(&encoded).unwrap();
+        assert_eq!(decoded, test_str);
+    }
+
+    #[test]
+    fn test_command_constructors() {
+        let name = "test_app";
+        
+        let cmd = Command::new_status(name);
+        if let Command::Status(payload) = cmd {
+            assert_eq!(Command::decode_payload(&payload).unwrap(), name);
+        } else {
+            panic!("Expected Status command");
+        }
+
+        let cmd = Command::new_start(name);
+        if let Command::Start(payload) = cmd {
+            assert_eq!(Command::decode_payload(&payload).unwrap(), name);
+        } else {
+            panic!("Expected Start command");
+        }
+
+        let cmd = Command::new_stop(name);
+        if let Command::Stop(payload) = cmd {
+            assert_eq!(Command::decode_payload(&payload).unwrap(), name);
+        } else {
+            panic!("Expected Stop command");
+        }
+    }
+
+    #[test]
+    fn test_message_chunk_default() {
+        let chunk = MessageChunk::default();
+        assert_eq!(chunk.sequence_number, 0);
+        assert!(!chunk.is_last);
+        assert_eq!(chunk.used_payload_size, 0);
+    }
+
+    #[test]
+    fn test_message_chunk_new() {
+        let data = b"test data".to_vec();
+        let chunk = MessageChunk::new(1, true, data.len() as u32, data.clone());
+        
+        assert_eq!(chunk.sequence_number, 1);
+        assert!(chunk.is_last);
+        assert_eq!(chunk.used_payload_size, data.len() as u32);
+        assert_eq!(&chunk.payload[..data.len()], &data[..]);
     }
 }

@@ -11,15 +11,15 @@ pub fn run_client(command: common::Command) -> Result<(), Box<dyn std::error::Er
         .config(&config)
         .create::<ipc::Service>()?;
 
-    let service_name = common::IPC_NAME;
+    let service_name = common::get_ipc_name();
 
     // Try to connect, auto-start daemon if needed
-    if !crate::communication::server::server_running(&node, service_name)? {
+    if !crate::communication::server::server_running(&node, &service_name)? {
         eprintln!("Daemon not running. Start it with: bpm daemon");
         return Err("Daemon not running".into());
     }
 
-    match request_server(&node, service_name, command, Duration::from_secs(5)) {
+    match request_server(&node, &service_name, command, Duration::from_secs(5)) {
         Ok(response) => {
             println!("{}", response);
         }
@@ -48,10 +48,10 @@ pub fn run_monit() -> Result<(), Box<dyn std::error::Error>> {
         .config(&config)
         .create::<ipc::Service>()?;
 
-    let service_name = common::IPC_NAME;
+    let service_name = common::get_ipc_name();
 
     // Check if daemon is running
-    if !crate::communication::server::server_running(&node, service_name)? {
+    if !crate::communication::server::server_running(&node, &service_name)? {
         eprintln!("Daemon not running. Start it with: bpm daemon");
         return Err("Daemon not running".into());
     }
@@ -65,7 +65,7 @@ pub fn run_monit() -> Result<(), Box<dyn std::error::Error>> {
         // Get process list
         let response = request_server(
             &node,
-            service_name,
+            &service_name,
             common::Command::List,
             Duration::from_secs(2),
         )

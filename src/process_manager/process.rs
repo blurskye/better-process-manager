@@ -45,7 +45,7 @@ pub fn combined_usage(root_pid: u32) -> Result<(f32, u64), Box<dyn Error>> {
     let mut total_cpu = 0.0;
     let mut mem_total = 0;
 
-    let all_pids = collect_descendants(root_pid).unwrap();
+    let all_pids = collect_descendants(root_pid)?;
     let sys = SYSTEM.lock().unwrap();
     all_pids.iter().for_each(|x| {
         if let Some(process) = sys.process(*x) {
@@ -55,4 +55,48 @@ pub fn combined_usage(root_pid: u32) -> Result<(f32, u64), Box<dyn Error>> {
     });
 
     Ok((total_cpu, mem_total))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_collect_descendants_invalid_pid() {
+        // Use a PID that definitely doesn't exist
+        let result = collect_descendants(999999);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_collect_descendants_self() {
+        // Get current process PID
+        let pid = std::process::id();
+        let result = collect_descendants(pid);
+        
+        // Should succeed and include at least the current process
+        assert!(result.is_ok());
+        let descendants = result.unwrap();
+        assert!(!descendants.is_empty());
+        assert!(descendants.contains(&Pid::from_u32(pid)));
+    }
+
+    #[test]
+    fn test_combined_usage_invalid_pid() {
+        let result = combined_usage(999999);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_combined_usage_self() {
+        let pid = std::process::id();
+        let result = combined_usage(pid);
+        
+        // Should succeed and return some usage stats
+        assert!(result.is_ok());
+        let (cpu, mem) = result.unwrap();
+        // CPU might be 0 but memory should be > 0
+        assert!(cpu >= 0.0);
+        assert!(mem > 0);
+    }
 }

@@ -61,6 +61,8 @@ pub struct ProcessInfo {
     pub restart_count: u32,
     /// Time when the process was started
     pub started_at: Option<DateTime<Utc>>,
+    /// Number of consecutive quick crashes (< 5 seconds)
+    pub quick_crash_count: u32,
     /// Last known CPU usage (percentage)
     pub cpu_usage: f32,
     /// Last known memory usage (bytes)
@@ -121,6 +123,7 @@ impl ProcessInfo {
             env: app.env.clone(),
             restart_count: 0,
             started_at: None,
+            quick_crash_count: 0,
             cpu_usage: 0.0,
             memory_usage: 0,
             stdout_log,
@@ -214,6 +217,11 @@ impl ProcessInfo {
 
     /// Get the uptime as a human-readable string
     pub fn uptime(&self) -> String {
+        // Only show uptime if process is actually running
+        if self.state != ProcessState::Running && self.state != ProcessState::Starting {
+            return "-".to_string();
+        }
+
         match self.started_at {
             Some(started) => {
                 let duration = Utc::now().signed_duration_since(started);
@@ -351,27 +359,42 @@ impl ProcessRegistry {
             Err(_) => return,
         };
 
-        inner.system.refresh_all();
+        inner.system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
 
         // Collect PIDs first
         let pids_to_check: Vec<(String, u32)> = inner
             .processes
             .iter()
-            .filter_map(|(name, p)| p.pid.map(|pid| (name.clone(), pid)))
+            .filter_map(|(name, p)| {
+                if p.state == ProcessState::Running || p.state == ProcessState::Starting {
+                    p.pid.map(|pid| (name.clone(), pid))
+                } else {
+                    None
+                }
+            })
             .collect();
 
         // Collect metrics - use combined_usage to get process tree metrics
         let metrics: Vec<(String, Option<(f32, u64)>)> = pids_to_check
             .iter()
             .map(|(name, pid)| {
-                // Try to get combined metrics for process tree, fall back to single process
-                let metrics = combined_usage(*pid).ok().or_else(|| {
-                    let sys_pid = Pid::from_u32(*pid);
-                    inner
-                        .system
-                        .process(sys_pid)
-                        .map(|p| (p.cpu_usage(), p.memory()))
-                });
+                let sys_pid = Pid::from_u32(*pid);
+                // First check if process exists at all
+                let metrics = if let Some(proc) = inner.system.process(sys_pid) {
+                    // Check if process is a zombie (defunct)
+                    use sysinfo::ProcessStatus;
+                    if proc.status() == ProcessStatus::Zombie {
+                        // Process is dead (zombie)
+                        None
+                    } else {
+                        // Try combined usage for process tree, fall back to single process
+                        combined_usage(*pid).ok().or_else(|| {
+                            Some((proc.cpu_usage(), proc.memory()))
+                        })
+                    }
+                } else {
+                    None
+                };
                 (name.clone(), metrics)
             })
             .collect();
@@ -382,11 +405,20 @@ impl ProcessRegistry {
                 if let Some((cpu, mem)) = opt_metrics {
                     process.cpu_usage = cpu;
                     process.memory_usage = mem;
+                    // Ensure state is Running if we got metrics
+                    if process.state == ProcessState::Starting {
+                        process.state = ProcessState::Running;
+                    }
                 } else {
-                    // Process has died
-                    if process.state == ProcessState::Running {
-                        process.state = ProcessState::Errored;
+                    // Process has died - mark as errored or stopped
+                    if process.state == ProcessState::Running || process.state == ProcessState::Starting {
+                        process.state = if process.auto_restart {
+                            ProcessState::Errored
+                        } else {
+                            ProcessState::Stopped
+                        };
                         process.pid = None;
+                        // Don't clear started_at - keep it for crash detection
                     }
                 }
             }
@@ -463,6 +495,44 @@ impl ProcessRegistry {
         }
     }
 
+    /// Check if process died quickly (< 5 seconds) and increment counter
+    /// Returns true if we should stop restarting (3 quick crashes)
+    pub fn check_quick_crash(&self, name: &str) -> bool {
+        let mut inner = match self.inner.write() {
+            Ok(guard) => guard,
+            Err(_) => return false,
+        };
+
+        if let Some(process) = inner.processes.get_mut(name) {
+            if let Some(started) = process.started_at {
+                let uptime = Utc::now().signed_duration_since(started);
+                if uptime.num_seconds() < 5 {
+                    // Quick crash!
+                    process.quick_crash_count += 1;
+                    if process.quick_crash_count >= 3 {
+                        // Too many quick crashes, stop restarting
+                        return true;
+                    }
+                } else {
+                    // Process ran for > 5 seconds, reset quick crash counter
+                    process.quick_crash_count = 0;
+                }
+            }
+        }
+        false
+    }
+
+    /// Reset quick crash counter (called on successful long run)
+    pub fn reset_quick_crash_count(&self, name: &str) -> Result<(), String> {
+        let mut inner = self.inner.write().map_err(|e| e.to_string())?;
+        if let Some(process) = inner.processes.get_mut(name) {
+            process.quick_crash_count = 0;
+            Ok(())
+        } else {
+            Err(format!("Process '{}' not found", name))
+        }
+    }
+
     /// Format process list as a table string
     pub fn format_table(&self) -> String {
         let processes = self.list();
@@ -473,27 +543,29 @@ impl ProcessRegistry {
 
         let mut output = String::new();
         output.push_str(&format!(
-            "{:<4} {:<20} {:<10} {:<8} {:<8} {:<10} {:<8}\n",
+            "{:<4} {:<20} {:<18} {:<8} {:<8} {:<10} {:<10}\n",
             "ID", "NAME", "STATUS", "↺", "CPU", "MEM", "UPTIME"
         ));
-        output.push_str(&"-".repeat(76));
+        output.push_str(&"-".repeat(80));
         output.push('\n');
 
         for (idx, process) in processes.iter().enumerate() {
-            let status_color = match process.state {
-                ProcessState::Running => "🟢",
-                ProcessState::Stopped => "⚪",
-                ProcessState::Errored => "🔴",
-                ProcessState::Starting | ProcessState::Restarting => "🟡",
-                ProcessState::Stopping => "🟠",
+            let (status_icon, status_text) = match process.state {
+                ProcessState::Running => ("🟢", "running"),
+                ProcessState::Stopped => ("⚪", "stopped"),
+                ProcessState::Errored => ("🔴", "errored"),
+                ProcessState::Starting => ("🟡", "starting"),
+                ProcessState::Restarting => ("🟡", "restarting"),
+                ProcessState::Stopping => ("🟠", "stopping"),
             };
 
+            let status_display = format!("{} {}", status_icon, status_text);
+
             output.push_str(&format!(
-                "{:<4} {:<20} {} {:<7} {:<8} {:<8} {:<10} {:<8}\n",
+                "{:<4} {:<20} {:<18} {:<8} {:<8} {:<10} {:<10}\n",
                 idx,
                 truncate(&process.name, 20),
-                status_color,
-                process.state,
+                status_display,
                 process.restart_count,
                 format!("{:.1}%", process.cpu_usage),
                 process.memory_display(),
@@ -560,6 +632,7 @@ mod tests {
             env: HashMap::new(),
             restart_count: 0,
             started_at: None,
+            quick_crash_count: 0,
             cpu_usage: 0.0,
             memory_usage: 0,
             stdout_log: PathBuf::from("/tmp/out.log"),
@@ -699,5 +772,54 @@ mod tests {
             ProcessInfo::parse_duration_str("invalid"),
             Duration::from_secs(30)
         ); // Default
+    }
+
+    #[test]
+    fn test_quick_crash_detection() {
+        let registry = ProcessRegistry::new();
+        let mut info = create_test_process("crash-test");
+        info.started_at = Some(Utc::now());
+        
+        registry.register(info).unwrap();
+
+        // Simulate quick crashes
+        assert!(!registry.check_quick_crash("crash-test")); // 1st crash
+        assert!(!registry.check_quick_crash("crash-test")); // 2nd crash
+        assert!(registry.check_quick_crash("crash-test"));  // 3rd crash - should stop
+
+        let process = registry.get("crash-test").unwrap();
+        assert_eq!(process.quick_crash_count, 3);
+    }
+
+    #[test]
+    fn test_quick_crash_reset_on_long_run() {
+        let registry = ProcessRegistry::new();
+        let mut info = create_test_process("long-run-test");
+        // Set started_at to 10 seconds ago
+        info.started_at = Some(Utc::now() - chrono::Duration::seconds(10));
+        
+        registry.register(info).unwrap();
+
+        // First crash after long run - should reset counter
+        assert!(!registry.check_quick_crash("long-run-test"));
+        
+        let process = registry.get("long-run-test").unwrap();
+        assert_eq!(process.quick_crash_count, 0); // Reset because it ran > 5 seconds
+    }
+
+    #[test]
+    fn test_manual_reset_quick_crash_count() {
+        let registry = ProcessRegistry::new();
+        let mut info = create_test_process("reset-test");
+        info.started_at = Some(Utc::now());
+        info.quick_crash_count = 2;
+        
+        registry.register(info).unwrap();
+
+        // Manually reset
+        assert!(registry.reset_quick_crash_count("reset-test").is_ok());
+        
+        let process = registry.get("reset-test").unwrap();
+        assert_eq!(process.quick_crash_count, 0);
     }
 }

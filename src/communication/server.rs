@@ -55,7 +55,8 @@ pub fn run_server() -> Result<(), Box<dyn std::error::Error>> {
         .config(&config)
         .create::<ipc::Service>()?;
 
-    if server_running(&node, common::IPC_NAME)? {
+    let ipc_name = common::get_ipc_name();
+    if server_running(&node, &ipc_name)? {
         eprintln!("Another instance of the daemon is already running.");
         std::process::exit(1);
     }
@@ -66,7 +67,7 @@ pub fn run_server() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Warning: Could not load previous state: {}", e);
     }
 
-    let service_name = common::IPC_NAME.try_into()?;
+    let service_name = ipc_name.as_str().try_into()?;
     let service = node
         .service_builder(&service_name)
         .request_response::<common::Command, common::MessageChunk>()
@@ -84,21 +85,47 @@ pub fn run_server() -> Result<(), Box<dyn std::error::Error>> {
         let mut file_watchers: HashMap<String, FileWatcher> = HashMap::new();
 
         loop {
-            std::thread::sleep(Duration::from_secs(5));
+            std::thread::sleep(Duration::from_secs(1)); // Check every second
             registry_clone.refresh_metrics();
+
+            // Reset crash counter for processes that have been running > 5 seconds
+            let running = registry_clone.get_running_processes();
+            for process in &running {
+                if let Some(started) = process.started_at {
+                    let uptime = Utc::now().signed_duration_since(started);
+                    if uptime.num_seconds() >= 5 && process.quick_crash_count > 0 {
+                        let _ = registry_clone.reset_quick_crash_count(&process.name);
+                    }
+                }
+            }
 
             // Check for dead processes that need restart
             let dead = registry_clone.check_dead_processes();
             for name in dead {
                 if let Some(process) = registry_clone.get(&name) {
+                    // Check if process died too quickly (< 5 seconds)
+                    let should_stop = registry_clone.check_quick_crash(&name);
+                    
+                    if should_stop {
+                        println!(
+                            "Process '{}' crashed 3 times within 5 seconds. Giving up.",
+                            name
+                        );
+                        let _ = registry_clone.update_state(&name, ProcessState::Stopped);
+                        continue;
+                    }
+                    
                     println!("Process '{}' died, attempting restart...", name);
                     let _ = registry_clone.update_state(&name, ProcessState::Restarting);
-                    let _ = registry_clone.increment_restart_count(&name);
+                    let new_count = registry_clone.increment_restart_count(&name).unwrap_or(0);
 
                     // Actually restart the process
                     match start_process(&registry_clone, &process) {
-                        Ok(_) => println!("Process '{}' restarted successfully", name),
-                        Err(e) => eprintln!("Failed to restart '{}': {}", name, e),
+                        Ok(_) => println!("Process '{}' restarted successfully (restart #{})", name, new_count),
+                        Err(e) => {
+                            eprintln!("Failed to restart '{}': {}", name, e);
+                            let _ = registry_clone.update_state(&name, ProcessState::Stopped);
+                        }
                     }
                 }
             }
@@ -271,11 +298,29 @@ fn handle_status(registry: &ProcessRegistry, name: &str) -> String {
     }
 }
 
-fn handle_start(registry: &ProcessRegistry, path: &str) -> String {
-    let config_path = PathBuf::from(path);
+fn handle_start(registry: &ProcessRegistry, path_or_name: &str) -> String {
+    // First check if it's an existing process name or ID
+    let existing_process = if let Ok(id) = path_or_name.parse::<usize>() {
+        let processes = registry.list();
+        processes.get(id).cloned()
+    } else {
+        registry.get(path_or_name)
+    };
+
+    // If it's an existing process, just start it
+    if let Some(process) = existing_process {
+        let name = process.name.clone();
+        match start_process(registry, &process) {
+            Ok(_) => return format!("Started: {}", name),
+            Err(e) => return format!("Failed to start {}: {}", name, e),
+        }
+    }
+
+    // Otherwise, treat it as a config file path
+    let config_path = PathBuf::from(path_or_name);
 
     if !config_path.exists() {
-        return format!("Config file not found: {}", path);
+        return format!("Process or config file not found: {}", path_or_name);
     }
 
     let config = match AppConfig::from_file(&config_path) {
@@ -341,11 +386,20 @@ fn start_process(
     Ok(())
 }
 
-fn handle_stop(registry: &ProcessRegistry, name: &str) -> String {
-    match registry.get(name) {
+fn handle_stop(registry: &ProcessRegistry, name_or_id: &str) -> String {
+    // Try to find process by ID first, then by name
+    let process = if let Ok(id) = name_or_id.parse::<usize>() {
+        let processes = registry.list();
+        processes.get(id).cloned()
+    } else {
+        registry.get(name_or_id)
+    };
+
+    match process {
         Some(process) => {
+            let name = process.name.clone();
             if let Some(pid) = process.pid {
-                let _ = registry.update_state(name, ProcessState::Stopping);
+                let _ = registry.update_state(&name, ProcessState::Stopping);
 
                 // Send SIGTERM
                 if let Err(e) = nix::sys::signal::kill(
@@ -358,36 +412,57 @@ fn handle_stop(registry: &ProcessRegistry, name: &str) -> String {
                 // Wait a bit, then check if process is still running
                 std::thread::sleep(Duration::from_secs(2));
 
-                // Check if still running, send SIGKILL if needed
-                if let Some(updated) = registry.get(name) {
-                    if updated.pid.is_some() {
-                        let _ = nix::sys::signal::kill(
-                            nix::unistd::Pid::from_raw(pid as i32),
-                            nix::sys::signal::Signal::SIGKILL,
-                        );
-                    }
+                // Verify process is actually dead using sysinfo
+                use sysinfo::{Pid, ProcessesToUpdate, System};
+                let mut sys = System::new();
+                sys.refresh_processes(ProcessesToUpdate::All, true);
+                let sys_pid = Pid::from_u32(pid);
+                
+                if sys.process(sys_pid).is_some() {
+                    // Still running, send SIGKILL
+                    let _ = nix::sys::signal::kill(
+                        nix::unistd::Pid::from_raw(pid as i32),
+                        nix::sys::signal::Signal::SIGKILL,
+                    );
+                    std::thread::sleep(Duration::from_millis(500));
                 }
 
-                let _ = registry.update_state(name, ProcessState::Stopped);
-                let _ = registry.update_pid(name, None);
+                let _ = registry.update_state(&name, ProcessState::Stopped);
+                let _ = registry.update_pid(&name, None);
 
                 format!("Stopped: {}", name)
             } else {
                 format!("Process '{}' is not running", name)
             }
         }
-        None => format!("Process '{}' not found", name),
+        None => format!("Process '{}' not found", name_or_id),
     }
 }
 
-fn handle_restart(registry: &ProcessRegistry, name: &str) -> String {
-    let stop_result = handle_stop(registry, name);
+fn handle_restart(registry: &ProcessRegistry, name_or_id: &str) -> String {
+    // Get the actual process name first
+    let process_name = if let Ok(id) = name_or_id.parse::<usize>() {
+        let processes = registry.list();
+        processes.get(id).map(|p| p.name.clone())
+    } else {
+        registry.get(name_or_id).map(|p| p.name.clone())
+    };
 
-    if let Some(process) = registry.get(name) {
-        std::thread::sleep(Duration::from_millis(500));
-        match start_process(registry, &process) {
-            Ok(_) => format!("{}\nRestarted: {}", stop_result, name),
-            Err(e) => format!("{}\nFailed to restart: {}", stop_result, e),
+    let stop_result = handle_stop(registry, name_or_id);
+
+    if let Some(name) = process_name {
+        if let Some(process) = registry.get(&name) {
+            std::thread::sleep(Duration::from_millis(500));
+            
+            // Increment restart counter for manual restarts
+            let new_count = registry.increment_restart_count(&name).unwrap_or(0);
+            
+            match start_process(registry, &process) {
+                Ok(_) => format!("{}\nRestarted: {} (restart #{})", stop_result, name, new_count),
+                Err(e) => format!("{}\nFailed to restart: {}", stop_result, e),
+            }
+        } else {
+            stop_result
         }
     } else {
         stop_result
@@ -419,11 +494,20 @@ fn handle_disable(registry: &ProcessRegistry, name: &str) -> String {
 
 fn handle_logs(registry: &ProcessRegistry, args: &str) -> String {
     let parts: Vec<&str> = args.split(':').collect();
-    let name = parts.first().unwrap_or(&"");
+    let name_or_id = parts.first().unwrap_or(&"");
     let lines: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(20);
     // follow is ignored in this simple implementation
 
-    if let Some(process) = registry.get(name) {
+    // Try to find process by ID first, then by name
+    let process = if let Ok(id) = name_or_id.parse::<usize>() {
+        let processes = registry.list();
+        processes.get(id).cloned()
+    } else {
+        registry.get(name_or_id)
+    };
+
+    if let Some(process) = process {
+        let name = process.name.clone();
         let mut output = String::new();
 
         // Read stdout log
@@ -454,7 +538,7 @@ fn handle_logs(registry: &ProcessRegistry, args: &str) -> String {
             output
         }
     } else {
-        format!("Process '{}' not found", name)
+        format!("Process '{}' not found", name_or_id)
     }
 }
 
