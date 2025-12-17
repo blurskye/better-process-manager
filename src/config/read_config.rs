@@ -1,17 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::SystemTime;
 
+use serde::de::Deserializer;
 use std::time::Duration;
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)] //auto cohersion into what matches signature
 pub enum AppConfig {
     // Single app will look like { "name": "web-server", "script": "node server.js", ... }
-    SingleApp(App),
+    SingleApp(Box<App>),
 
     // Multi-app will look like { "my-project": [{ "name": "web-server", ... }, { "name": "worker", ... }] }
-    MultiApp(HashMap<String, Vec<App>>),
+    MultiApp(Box<HashMap<String, Vec<App>>>),
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -97,24 +97,12 @@ pub struct HealthCheck {
 pub enum HealthCheckType {
     Http,
     Command,
-    Tcp,
-}
-
-// BPM State (saved in ~/.config/bpm/state.json)
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct BpmState {
-    pub enabled: HashMap<String, AppReference>, // Apps user enabled
-    pub disabled: HashMap<String, AppReference>, // Apps user disabled
-    pub deleted: HashMap<String, AppReference>, // Apps user deleted (for cleanup)
-    pub last_updated: SystemTime,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct AppReference {
-    pub config_path: PathBuf,         // Path to the JSON file
-    pub enabled_at: SystemTime,       // When it was enabled/disabled/deleted
-    pub checksum: Option<String>,     // File checksum to detect changes
-    pub project_name: Option<String>, // If from multi-app config, which project
+    pub config_path: PathBuf,     // Path to the JSON file
+    pub checksum: Option<String>, // File checksum to detect changes
 }
 
 fn default_instances() -> u32 {
@@ -130,10 +118,10 @@ fn default_restart_policy() -> RestartPolicy {
     RestartPolicy::OnFailure
 }
 fn default_max_restarts() -> i32 {
-    3
+    -1
 }
-fn default_restart_delay() -> String {
-    "5s".to_string()
+fn default_restart_delay() -> Duration {
+    Duration::from_secs(5)
 }
 fn default_health_interval() -> String {
     "30s".to_string()
@@ -195,18 +183,6 @@ impl Default for RestartConfig {
     }
 }
 
-impl Default for BpmState {
-    fn default() -> Self {
-        Self {
-            enabled: HashMap::new(),
-            disabled: HashMap::new(),
-            deleted: HashMap::new(),
-            last_updated: SystemTime::now(),
-        }
-    }
-}
-
-// Parsing and helper functions
 impl AppConfig {
     pub fn from_file(path: &PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
         let content = std::fs::read_to_string(path)?;
@@ -215,17 +191,17 @@ impl AppConfig {
     }
 
     // Get all apps from this config, regardless of format
-    pub fn get_apps(&self) -> (Option<String>, Vec<(App)>) {
+    pub fn get_apps(&self) -> (Option<String>, Vec<App>) {
         match self {
-            AppConfig::SingleApp(app) => (None, vec![app.clone()]),
+            AppConfig::SingleApp(app) => (None, vec![*app.clone()]),
             AppConfig::MultiApp(projects) => {
                 let mut apps = Vec::new();
-                for (project_name, project_apps) in projects {
+                for (_, project_apps) in (*projects).iter() {
                     for app in project_apps {
                         apps.push(app.clone());
                     }
                 }
-                (Some(projects.keys().0), apps)
+                (Some(projects.keys().next().unwrap().to_owned()), apps)
             }
         }
     }

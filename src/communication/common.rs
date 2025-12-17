@@ -9,7 +9,8 @@ pub(super) const CHUNK_PAYLOAD_CAPACITY: usize = MAX_PAYLOAD_SIZE - CHUNK_METADA
 
 #[derive(Debug, ZeroCopySend)]
 #[repr(C)]
-pub(super) enum Command {
+pub enum Command {
+    Daemon,
     List,
     Status([u8; CHUNK_PAYLOAD_CAPACITY]),
     Start([u8; CHUNK_PAYLOAD_CAPACITY]),
@@ -33,6 +34,12 @@ impl Command {
             .position(|&b| b == 0)
             .unwrap_or(payload.len());
         std::str::from_utf8(&payload[..end])
+    }
+    pub fn new_daemon() -> Self {
+        Self::Daemon
+    }
+    pub fn new_list() -> Self {
+        Self::List
     }
 
     pub fn new_status(input: &str) -> Self {

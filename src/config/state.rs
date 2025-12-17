@@ -5,26 +5,24 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct BpmState {
+pub struct BpmConfig {
     pub enabled: HashMap<String, AppReference>, // Apps user enabled
     pub disabled: HashMap<String, AppReference>, // Apps user disabled
-    pub stopped: HashMap<String, AppReference>,
     pub deleted: HashMap<String, AppReference>, // Apps user deleted (for cleanup)
     pub last_updated: SystemTime,
 }
 
-impl Default for BpmState {
+impl Default for BpmConfig {
     fn default() -> Self {
         Self {
             enabled: HashMap::new(),
             disabled: HashMap::new(),
             deleted: HashMap::new(),
-            stopped: HashMap::new(),
             last_updated: SystemTime::now(),
         }
     }
 }
-impl BpmState {
+impl BpmConfig {
     pub fn load_or_create(state_path: &PathBuf) -> Self {
         if state_path.exists() {
             std::fs::read_to_string(state_path)
@@ -51,13 +49,10 @@ impl BpmState {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let config = AppConfig::from_file(&config_path)?;
         let apps = config.get_apps();
-
-        for (project_name, app) in apps {
+        for app in apps.1 {
             let app_ref = AppReference {
                 config_path: config_path.clone(),
-                enabled_at: SystemTime::now(),
                 checksum: Self::calculate_checksum(&config_path),
-                project_name: project_name.clone(),
             };
 
             // Remove from disabled/deleted if exists
@@ -72,8 +67,7 @@ impl BpmState {
 
     pub fn disable_app(&mut self, name: &str) {
         if let Some(app_ref) = self.enabled.remove(name) {
-            let mut disabled_ref = app_ref;
-            disabled_ref.enabled_at = SystemTime::now();
+            let disabled_ref = app_ref;
             self.disabled.insert(name.to_string(), disabled_ref);
             self.last_updated = SystemTime::now();
         }
@@ -85,8 +79,7 @@ impl BpmState {
             .remove(name)
             .or_else(|| self.disabled.remove(name));
 
-        if let Some(mut app_ref) = app_ref {
-            app_ref.enabled_at = SystemTime::now();
+        if let Some(app_ref) = app_ref {
             self.deleted.insert(name.to_string(), app_ref);
             self.last_updated = SystemTime::now();
         }
@@ -101,4 +94,10 @@ impl BpmState {
             format!("{:x}", hasher.finish())
         })
     }
+}
+
+pub struct BpmState {
+    pub enabled: HashMap<String, AppReference>, // Apps user enabled
+    pub disabled: HashMap<String, AppReference>, // Apps user disabled
+    pub runing: HashMap<String, AppReference>,
 }

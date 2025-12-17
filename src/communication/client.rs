@@ -4,7 +4,7 @@ use crate::communication::common;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-pub fn run_client() -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_client(command: common::Command) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::default();
     let node = NodeBuilder::new()
         .config(&config)
@@ -13,12 +13,7 @@ pub fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     let service_name = common::IPC_NAME;
 
     println!("Requesting 'list' command from server...");
-    match request_server(
-        &node,
-        service_name,
-        common::Command::List,
-        Duration::from_secs(5),
-    ) {
+    match request_server(&node, service_name, command, Duration::from_secs(5)) {
         Ok(response) => {
             // println!("\n--- Server Response ---\n{}", response);
             println!("{}", response);
