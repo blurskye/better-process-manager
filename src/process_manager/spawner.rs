@@ -1,3 +1,9 @@
+//! Process spawner utilities
+//!
+//! Async-based process spawning with log handling.
+
+#![allow(dead_code)] // Spawner is for future use with async integration
+
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::fs::OpenOptions;
@@ -6,8 +12,6 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 
 use std::time::{Duration, Instant};
-//not useful now, better we have everything in function parameters instead, might delethe this
-//struct
 pub struct LaunchCommand {
     program: String,
     directory: String,

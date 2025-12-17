@@ -1,11 +1,12 @@
-//! Logging Module
+//! Logging Module  
 //!
 //! Implements log management including rotation, streaming, and formatting.
 
+#![allow(dead_code)] // These utilities are for future use
+
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 /// Configuration for log rotation
 #[derive(Debug, Clone)]
@@ -63,8 +64,8 @@ impl LogManager {
 
     /// Get combined logs (interleaved by timestamp if available)
     pub fn get_combined_logs(&self, lines: usize) -> io::Result<String> {
-        let mut stdout_lines = self.tail_stdout(lines)?;
-        let mut stderr_lines = self.tail_stderr(lines)?;
+        let stdout_lines = self.tail_stdout(lines)?;
+        let stderr_lines = self.tail_stderr(lines)?;
 
         let mut output = String::new();
         output.push_str("=== stdout ===\n");
@@ -148,7 +149,7 @@ impl LogManager {
 }
 
 /// Read the last N lines from a file
-pub fn tail_file(path: &Path, lines: usize) -> io::Result<Vec<String>> {
+fn tail_file(path: &Path, lines: usize) -> io::Result<Vec<String>> {
     if !path.exists() {
         return Ok(Vec::new());
     }

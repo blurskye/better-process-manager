@@ -1,6 +1,10 @@
+//! Error trait extensions
+
+#![allow(dead_code)] // Utility trait for future use
+
 use std::error::Error;
 
-pub trait Errorbpm: Error {
+pub trait ErrorExt: Error {
     fn print_error_stack(&self) {
         eprintln!("Error: {}", self);
 
@@ -12,4 +16,4 @@ pub trait Errorbpm: Error {
     }
 }
 
-impl<T: Error> Errorbpm for T {}
+impl<T: Error> ErrorExt for T {}

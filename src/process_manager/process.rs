@@ -1,3 +1,9 @@
+//! Process utilities for collecting process tree info
+//!
+//! Provides utilities for getting descendant processes and combined usage stats.
+
+#![allow(dead_code)] // These utilities are for future use
+
 use once_cell::sync::Lazy;
 use std::collections::VecDeque;
 use std::error::Error;

@@ -1,8 +1,11 @@
-use crate::error::Errorbpm;
+//! Config Error Types
+
+#![allow(dead_code)] // Error types for future use
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub(super) enum process_manager_error {
-    #[error("unforeseen error happened, couldnt figure out what error")]
-    UnknownError,
+pub enum ConfigError {
+    #[error("unforeseen error occurred")]
+    Unknown,
 }

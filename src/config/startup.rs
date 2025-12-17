@@ -1,7 +1,11 @@
+//! Startup script generation for systemd
+//!
+//! Generates systemd user service files for automatic startup.
+
+#![allow(dead_code)] // remove_startup_script for future unstartup command
+
 use std::fs;
 use std::path::PathBuf;
-
-/// Generate a systemd user service file for the process manager daemon
 pub fn generate_startup_script() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
     let systemd_user_dir = home.join(".config/systemd/user");

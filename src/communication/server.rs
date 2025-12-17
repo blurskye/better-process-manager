@@ -1,12 +1,10 @@
-use iceoryx2::prelude::*;
-
 use crate::communication::common::ChunkPayload;
 use crate::config::read_config::AppConfig;
 use crate::process_manager::registry::{ProcessInfo, ProcessRegistry, ProcessState};
 use iceoryx2::active_request::ActiveRequest;
+use iceoryx2::prelude::*;
 use iceoryx2::service::builder::request_response::RequestResponseOpenError;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::communication::common;
@@ -145,9 +143,6 @@ pub fn run_server() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 common::Command::Save => handle_save(registry),
                 common::Command::Resurrect => handle_resurrect(registry),
-                common::Command::Daemon | common::Command::Monit => {
-                    "Invalid command for daemon".to_string()
-                }
             };
 
             send_response(&request, response, common::CHUNK_PAYLOAD_CAPACITY)?;

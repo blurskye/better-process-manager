@@ -1,14 +1,26 @@
-use super::read_config::{AppConfig, AppReference};
+//! Config state management
+//!
+//! Tracks enabled/disabled applications.
+
+#![allow(dead_code)] // For future use
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+/// Reference to an app's config file
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct AppReference {
+    pub config_path: PathBuf,
+    pub checksum: Option<String>,
+}
+
+/// Persistent BPM configuration state
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct BpmConfig {
-    pub enabled: HashMap<String, AppReference>, // Apps user enabled
-    pub disabled: HashMap<String, AppReference>, // Apps user disabled
-    pub deleted: HashMap<String, AppReference>, // Apps user deleted (for cleanup)
+    pub enabled: HashMap<String, AppReference>,
+    pub disabled: HashMap<String, AppReference>,
     pub last_updated: SystemTime,
 }
 
@@ -17,11 +29,11 @@ impl Default for BpmConfig {
         Self {
             enabled: HashMap::new(),
             disabled: HashMap::new(),
-            deleted: HashMap::new(),
             last_updated: SystemTime::now(),
         }
     }
 }
+
 impl BpmConfig {
     pub fn load_or_create(state_path: &PathBuf) -> Self {
         if state_path.exists() {
@@ -42,62 +54,4 @@ impl BpmConfig {
         std::fs::write(state_path, content)?;
         Ok(())
     }
-
-    pub fn enable_apps_from_config(
-        &mut self,
-        config_path: PathBuf,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let config = AppConfig::from_file(&config_path)?;
-        let apps = config.get_apps();
-        for app in apps.1 {
-            let app_ref = AppReference {
-                config_path: config_path.clone(),
-                checksum: Self::calculate_checksum(&config_path),
-            };
-
-            // Remove from disabled/deleted if exists
-            self.disabled.remove(&app.name);
-            self.deleted.remove(&app.name);
-            self.enabled.insert(app.name.clone(), app_ref);
-        }
-
-        self.last_updated = SystemTime::now();
-        Ok(())
-    }
-
-    pub fn disable_app(&mut self, name: &str) {
-        if let Some(app_ref) = self.enabled.remove(name) {
-            let disabled_ref = app_ref;
-            self.disabled.insert(name.to_string(), disabled_ref);
-            self.last_updated = SystemTime::now();
-        }
-    }
-
-    pub fn delete_app(&mut self, name: &str) {
-        let app_ref = self
-            .enabled
-            .remove(name)
-            .or_else(|| self.disabled.remove(name));
-
-        if let Some(app_ref) = app_ref {
-            self.deleted.insert(name.to_string(), app_ref);
-            self.last_updated = SystemTime::now();
-        }
-    }
-
-    fn calculate_checksum(path: &PathBuf) -> Option<String> {
-        std::fs::read_to_string(path).ok().map(|content| {
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-            let mut hasher = DefaultHasher::new();
-            content.hash(&mut hasher);
-            format!("{:x}", hasher.finish())
-        })
-    }
-}
-
-pub struct BpmState {
-    pub enabled: HashMap<String, AppReference>, // Apps user enabled
-    pub disabled: HashMap<String, AppReference>, // Apps user disabled
-    pub runing: HashMap<String, AppReference>,
 }

@@ -97,12 +97,6 @@ pub enum HealthCheckType {
     Command,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct AppReference {
-    pub config_path: PathBuf,     // Path to the JSON file
-    pub checksum: Option<String>, // File checksum to detect changes
-}
-
 fn default_log_out() -> String {
     "stdout".to_string()
 }

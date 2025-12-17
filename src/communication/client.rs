@@ -33,6 +33,7 @@ pub fn run_client(command: common::Command) -> Result<(), Box<dyn std::error::Er
 }
 
 /// Run the monitoring dashboard (TUI)
+#[allow(dead_code)] // TUI dashboard for future 'monit' command
 pub fn run_monit() -> Result<(), Box<dyn std::error::Error>> {
     use crossterm::{
         event::{self, Event, KeyCode},

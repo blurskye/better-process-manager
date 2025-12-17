@@ -1,16 +1,20 @@
+//! IPC Communication Types
+//!
+//! Defines commands and message chunks for daemon communication.
+
 use iceoryx2::prelude::ZeroCopySend;
 
-pub(super) const MAX_PAYLOAD_SIZE: usize = 4096;
-pub(super) const CHUNK_METADATA_SIZE: usize = std::mem::size_of::<u128>()
+pub const MAX_PAYLOAD_SIZE: usize = 4096;
+pub const CHUNK_METADATA_SIZE: usize = std::mem::size_of::<u128>()
     + std::mem::size_of::<u32>()
     + std::mem::size_of::<bool>()
     + std::mem::size_of::<u32>();
-pub(super) const CHUNK_PAYLOAD_CAPACITY: usize = MAX_PAYLOAD_SIZE - CHUNK_METADATA_SIZE;
+pub const CHUNK_PAYLOAD_CAPACITY: usize = MAX_PAYLOAD_SIZE - CHUNK_METADATA_SIZE;
 
+/// Commands that can be sent to the daemon
 #[derive(Debug, ZeroCopySend)]
 #[repr(C)]
 pub enum Command {
-    Daemon,
     List,
     Status([u8; CHUNK_PAYLOAD_CAPACITY]),
     Start([u8; CHUNK_PAYLOAD_CAPACITY]),
@@ -23,7 +27,6 @@ pub enum Command {
     Flush([u8; CHUNK_PAYLOAD_CAPACITY]),
     Save,
     Resurrect,
-    Monit,
 }
 
 impl Command {
@@ -41,14 +44,6 @@ impl Command {
             .position(|&b| b == 0)
             .unwrap_or(payload.len());
         std::str::from_utf8(&payload[..end])
-    }
-
-    pub fn new_daemon() -> Self {
-        Self::Daemon
-    }
-
-    pub fn new_list() -> Self {
-        Self::List
     }
 
     pub fn new_status(input: &str) -> Self {
@@ -88,16 +83,18 @@ impl Command {
     }
 }
 
+/// Chunked message for large responses
 #[derive(Debug, ZeroCopySend)]
 #[repr(C)]
-pub(super) struct MessageChunk {
-    pub(super) sequence_number: u32,
-    pub(super) is_last: bool,
-    pub(super) used_payload_size: u32,
-    pub(super) payload: [u8; CHUNK_PAYLOAD_CAPACITY],
+pub struct MessageChunk {
+    pub sequence_number: u32,
+    pub is_last: bool,
+    pub used_payload_size: u32,
+    pub payload: [u8; CHUNK_PAYLOAD_CAPACITY],
 }
 
-pub(super) const IPC_NAME: &str = "better_process_manager";
+/// IPC service name
+pub const IPC_NAME: &str = "better_process_manager";
 
 impl Default for MessageChunk {
     fn default() -> Self {

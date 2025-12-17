@@ -53,8 +53,6 @@ enum CliCommands {
     Resurrect,
     /// Generate startup script
     Startup,
-    /// Open monitoring dashboard
-    Monit,
 }
 
 fn main() {
@@ -106,7 +104,6 @@ fn main() {
                 Err(e) => Err(e),
             }
         }
-        CliCommands::Monit => communication::client::run_monit(),
     };
 
     if let Err(e) = result {

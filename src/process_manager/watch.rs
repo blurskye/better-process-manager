@@ -2,6 +2,8 @@
 //!
 //! Implements file watching to automatically reload processes when source files change.
 
+#![allow(dead_code)] // Watch mode is for future integration
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};

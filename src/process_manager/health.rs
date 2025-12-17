@@ -2,6 +2,8 @@
 //!
 //! Implements HTTP, TCP, and command-based health checks for processes.
 
+#![allow(dead_code)] // Health checks are for future integration
+
 use std::net::TcpStream;
 use std::process::Command;
 use std::time::Duration;
