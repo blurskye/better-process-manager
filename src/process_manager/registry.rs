@@ -91,11 +91,15 @@ pub struct ProcessInfo {
 impl ProcessInfo {
     /// Create a new ProcessInfo from an App config
     pub fn from_app(app: &App, config_path: PathBuf) -> Self {
-        let log_dir = dirs::data_local_dir()
+        let default_log_dir = dirs::data_local_dir()
             .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join("bpm")
             .join("logs")
             .join(&app.name);
+
+        // Determine log paths - use custom if specified, otherwise default
+        let stdout_log = Self::resolve_log_path(&app.log.out, &default_log_dir, "out.log");
+        let stderr_log = Self::resolve_log_path(&app.log.error, &default_log_dir, "error.log");
 
         // Convert health check config if present
         let healthcheck = app
@@ -119,8 +123,8 @@ impl ProcessInfo {
             started_at: None,
             cpu_usage: 0.0,
             memory_usage: 0,
-            stdout_log: log_dir.join("out.log"),
-            stderr_log: log_dir.join("error.log"),
+            stdout_log,
+            stderr_log,
             auto_restart: matches!(
                 app.restart.policy,
                 crate::config::read_config::RestartPolicy::Always
@@ -166,6 +170,23 @@ impl ProcessInfo {
                 .as_ref()
                 .map(|s| Self::parse_duration_str(s))
                 .unwrap_or(Duration::from_secs(10)),
+        }
+    }
+
+    /// Resolve log path - use custom path if absolute, otherwise use default directory
+    fn resolve_log_path(config_path: &str, default_dir: &PathBuf, default_name: &str) -> PathBuf {
+        // "stdout" and "stderr" are special values meaning use default
+        if config_path == "stdout" || config_path == "stderr" {
+            return default_dir.join(default_name);
+        }
+
+        let path = PathBuf::from(config_path);
+        if path.is_absolute() {
+            // Absolute path - use as-is
+            path
+        } else {
+            // Relative path - use default directory
+            default_dir.join(default_name)
         }
     }
 
@@ -527,12 +548,9 @@ fn truncate(s: &str, max_len: usize) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_process_registry() {
-        let registry = ProcessRegistry::new();
-
-        let info = ProcessInfo {
-            name: "test".to_string(),
+    fn create_test_process(name: &str) -> ProcessInfo {
+        ProcessInfo {
+            name: name.to_string(),
             pid: None,
             state: ProcessState::Stopped,
             config_path: PathBuf::from("/tmp/test.json"),
@@ -554,7 +572,13 @@ mod tests {
             health_failures: 0,
             watch_dirs: vec![],
             watch_patterns: vec![],
-        };
+        }
+    }
+
+    #[test]
+    fn test_process_registry() {
+        let registry = ProcessRegistry::new();
+        let info = create_test_process("test");
 
         assert!(registry.register(info.clone()).is_ok());
         assert!(registry.get("test").is_some());
@@ -562,5 +586,118 @@ mod tests {
 
         let updated = registry.get("test").unwrap();
         assert_eq!(updated.state, ProcessState::Running);
+    }
+
+    #[test]
+    fn test_registry_duplicate_register() {
+        let registry = ProcessRegistry::new();
+        let info = create_test_process("dup-test");
+
+        assert!(registry.register(info.clone()).is_ok());
+        assert!(registry.register(info).is_err()); // Should fail on duplicate
+    }
+
+    #[test]
+    fn test_registry_update_pid() {
+        let registry = ProcessRegistry::new();
+        let info = create_test_process("pid-test");
+
+        registry.register(info).unwrap();
+        assert!(registry.update_pid("pid-test", Some(12345)).is_ok());
+
+        let process = registry.get("pid-test").unwrap();
+        assert_eq!(process.pid, Some(12345));
+        assert_eq!(process.state, ProcessState::Running);
+        assert!(process.started_at.is_some());
+    }
+
+    #[test]
+    fn test_registry_restart_count() {
+        let registry = ProcessRegistry::new();
+        let info = create_test_process("restart-test");
+
+        registry.register(info).unwrap();
+
+        let count = registry.increment_restart_count("restart-test").unwrap();
+        assert_eq!(count, 1);
+
+        let count = registry.increment_restart_count("restart-test").unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_registry_health_tracking() {
+        let registry = ProcessRegistry::new();
+        let info = create_test_process("health-test");
+
+        registry.register(info).unwrap();
+
+        // Test health failure tracking
+        assert_eq!(registry.increment_health_failures("health-test"), 1);
+        assert_eq!(registry.increment_health_failures("health-test"), 2);
+        assert_eq!(registry.increment_health_failures("health-test"), 3);
+
+        // Test reset
+        assert!(registry.reset_health_failures("health-test").is_ok());
+        let process = registry.get("health-test").unwrap();
+        assert_eq!(process.health_failures, 0);
+    }
+
+    #[test]
+    fn test_registry_get_running() {
+        let registry = ProcessRegistry::new();
+
+        let mut running = create_test_process("running");
+        running.state = ProcessState::Running;
+
+        let stopped = create_test_process("stopped");
+
+        registry.register(running).unwrap();
+        registry.register(stopped).unwrap();
+
+        let running_procs = registry.get_running_processes();
+        assert_eq!(running_procs.len(), 1);
+        assert_eq!(running_procs[0].name, "running");
+    }
+
+    #[test]
+    fn test_resolve_log_path_default() {
+        let default_dir = PathBuf::from("/var/log/bpm/test");
+
+        // "stdout" and "stderr" use defaults
+        let path = ProcessInfo::resolve_log_path("stdout", &default_dir, "out.log");
+        assert_eq!(path, PathBuf::from("/var/log/bpm/test/out.log"));
+
+        let path = ProcessInfo::resolve_log_path("stderr", &default_dir, "error.log");
+        assert_eq!(path, PathBuf::from("/var/log/bpm/test/error.log"));
+    }
+
+    #[test]
+    fn test_resolve_log_path_absolute() {
+        let default_dir = PathBuf::from("/var/log/bpm/test");
+
+        // Absolute path used as-is
+        let path = ProcessInfo::resolve_log_path("/custom/path/app.log", &default_dir, "out.log");
+        assert_eq!(path, PathBuf::from("/custom/path/app.log"));
+    }
+
+    #[test]
+    fn test_parse_duration() {
+        assert_eq!(
+            ProcessInfo::parse_duration_str("30s"),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            ProcessInfo::parse_duration_str("5m"),
+            Duration::from_secs(300)
+        );
+        assert_eq!(
+            ProcessInfo::parse_duration_str("1h"),
+            Duration::from_secs(3600)
+        );
+        assert_eq!(
+            ProcessInfo::parse_duration_str("invalid"),
+            Duration::from_secs(30)
+        ); // Default
     }
 }

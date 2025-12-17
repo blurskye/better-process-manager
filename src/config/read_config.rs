@@ -196,3 +196,100 @@ impl AppConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_single_app() {
+        let json = r#"{
+            "name": "test-app",
+            "script": "node",
+            "args": ["app.js"]
+        }"#;
+
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        let (_, apps) = config.get_apps();
+
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].name, "test-app");
+        assert_eq!(apps[0].script, "node");
+        assert_eq!(apps[0].args, vec!["app.js"]);
+    }
+
+    #[test]
+    fn test_parse_multi_app() {
+        let json = r#"{
+            "my-project": [
+                {"name": "app1", "script": "node", "args": ["a.js"]},
+                {"name": "app2", "script": "python", "args": ["b.py"]}
+            ]
+        }"#;
+
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        let (project_name, apps) = config.get_apps();
+
+        assert_eq!(project_name, Some("my-project".to_string()));
+        assert_eq!(apps.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_healthcheck() {
+        let json = r#"{
+            "name": "test-app",
+            "script": "node",
+            "args": ["app.js"],
+            "healthcheck": {
+                "type": "tcp",
+                "host": "127.0.0.1",
+                "port": 3000,
+                "interval": "30s",
+                "timeout": "5s",
+                "retries": 3
+            }
+        }"#;
+
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        let (_, apps) = config.get_apps();
+
+        let hc = apps[0].healthcheck.as_ref().unwrap();
+        assert!(matches!(hc.check_type, HealthCheckType::Tcp));
+        assert_eq!(hc.port, Some(3000));
+        assert_eq!(hc.retries, 3);
+    }
+
+    #[test]
+    fn test_parse_restart_policy() {
+        let json = r#"{
+            "name": "test",
+            "script": "node",
+            "args": [],
+            "restart": {
+                "policy": "on-failure",
+                "max_restarts": 5,
+                "restart_delay": "10s"
+            }
+        }"#;
+
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        let (_, apps) = config.get_apps();
+
+        assert!(matches!(apps[0].restart.policy, RestartPolicy::OnFailure));
+        assert_eq!(apps[0].restart.max_restarts, 5);
+    }
+
+    #[test]
+    fn test_default_values() {
+        let json = r#"{"name": "minimal", "script": "echo", "args": []}"#;
+
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        let (_, apps) = config.get_apps();
+
+        // Check defaults
+        assert_eq!(apps[0].log.out, "stdout");
+        assert_eq!(apps[0].log.error, "stderr");
+        assert!(matches!(apps[0].restart.policy, RestartPolicy::OnFailure));
+        assert_eq!(apps[0].restart.max_restarts, -1);
+    }
+}
